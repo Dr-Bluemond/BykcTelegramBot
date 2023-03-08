@@ -20,6 +20,7 @@ class Course(Base):
     select_end_date: Mapped[datetime.datetime]
     cancel_end_date: Mapped[datetime.datetime]
     status: Mapped[int] = mapped_column(index=True)
+    notified: Mapped[bool] = mapped_column(default=False)
 
     STATUS_NOT_SELECTED = 0  # 未选择 not selected and not wanted
     STATUS_SELECTED = 1  # 已选上 selected

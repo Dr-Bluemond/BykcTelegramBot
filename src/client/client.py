@@ -8,7 +8,8 @@ from typing import Optional, overload
 import requests
 
 from . import patterns
-from .exceptions import ApiError, LoginError, AlreadyChosen, FailedToChoose, FailedToDelChosen, TooEarlyToChoose
+from .exceptions import ApiException, LoginError, AlreadyChosen, FailedToChoose, FailedToDelChosen, TooEarlyToChoose, \
+    LoginExpired, UnknownError, CourseIsFull
 from .sso import SsoApi
 from .crypto import *
 
@@ -32,7 +33,7 @@ class Client:
             if self.session is None:
                 self.session = requests.Session()
             try:
-                result = self.get_user_profile()
+                result = self._unsafe_get_user_profile()
                 if result['employeeId'] == config.get('sso_username'):
                     print("soft login success")
                     return True
@@ -72,6 +73,18 @@ class Client:
         self.session = None
 
     def _call_api(self, api_name: str, data: dict):
+        """call api and try to deal with some exceptions"""
+        for retry in range(3):
+            try:
+                return self._unsafe_call_api(api_name, data)
+            except LoginExpired:
+                self.soft_login()
+                continue
+            except UnknownError as e:
+                time.sleep(1)
+                continue
+
+    def _unsafe_call_api(self, api_name: str, data: dict):
         """
         an intermediate method to call api which deals with crypto and auth
         :param api_name: could be found in `app.js`
@@ -79,7 +92,7 @@ class Client:
         :return: raw data returned by the api
         """
         if self.session is None:
-            raise LoginError("you must call `login` or `soft_login` before calling other apis")
+            raise LoginExpired
         url = config.get('bykc_root') + '/' + api_name
         data_str = json.dumps(data).encode()
         aes_key = generate_aes_key()
@@ -99,21 +112,26 @@ class Client:
             'ts': ts,
         }
 
-        resp = self.session.post(url, data=data_encrypted, headers=headers)
+        try:
+            resp = self.session.post(url, data=data_encrypted, headers=headers)
+        except requests.exceptions.ConnectionError:
+            raise UnknownError("failed to connect to server")
         text = resp.content
         if resp.status_code != 200:
-            raise ApiError(f"server panics with http status code: {resp.status_code}")
+            raise UnknownError(f"server panics with http status code: {resp.status_code}")
         try:
             message_decode_b64 = base64.b64decode(text)
         except binascii.Error:
-            raise ApiError(f"unable to parse response: {text}")
+            raise UnknownError(f"unable to parse response: {text}")
 
         try:
             api_resp = json.loads(aes_decrypt(message_decode_b64, aes_key))
         except ValueError:
-            raise LoginError("failed to decrypt response, it's usually because your login has expired")
+            raise LoginExpired("failed to decrypt response, it's usually because your login has expired")
 
-        if api_resp['status'] != '0':
+        if api_resp['status'] == '98005399':
+            raise LoginExpired("login expired")
+        elif api_resp['status'] != '0':
             if api_resp['errmsg'].find('已报名过该课程，请不要重复报名') >= 0:
                 raise AlreadyChosen("已报名过该课程，请不要重复报名")
             if api_resp['errmsg'].find('该课程还未开始选课，请耐心等待') >= 0:
@@ -121,12 +139,20 @@ class Client:
             if api_resp['errmsg'].find('选课失败，该课程不可选择') >= 0:
                 raise FailedToChoose('选课失败，该课程不可选择')
             if api_resp['errmsg'].find('报名失败，该课程人数已满！') >= 0:
-                raise FailedToChoose("报名失败，该课程人数已满！")
+                raise CourseIsFull("报名失败，该课程人数已满！")
             if api_resp['errmsg'].find('退选失败，未找到退选课程或已超过退选时间') >= 0:
                 raise FailedToDelChosen("退选失败，未找到退选课程或已超过退选时间")
             print(api_resp)
-            raise ApiError(f"server returns a non zero api status code: {api_resp['status']}")
+            raise ApiException(f"server returns a non zero api status code: {api_resp['status']}")
         return api_resp['data']
+
+    def _unsafe_get_user_profile(self):
+        """
+        get your profile
+        :return: an object contains your profile
+        """
+        result = self._unsafe_call_api('getUserProfile', {})
+        return result
 
     def get_user_profile(self):
         """
