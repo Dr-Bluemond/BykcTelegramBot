@@ -1,3 +1,4 @@
 .idea
 config.json
 storage.json
+db.sqlite3
