@@ -227,12 +227,10 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     course_id, is_detail = query.data.split(' ')[1:]
     course_id = int(course_id)
-    update_info = False
     current_count = None
     try:
         resp = client.chose_course(course_id)
         context.application.create_task(query.answer("选课成功"))
-        update_info = True
         current_count = resp['courseCurrentCount']
     except TooEarlyToChoose:
         with Session(engine) as session:
@@ -240,7 +238,6 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
             course.status = Course.STATUS_BOOKED
             session.commit()
             __add_rush_job(context.job_queue, course)
-            update_info = True
             context.application.create_task(query.answer("还未开始，预约选课成功"))
     except CourseIsFull:
         with Session(engine) as session:
@@ -248,20 +245,17 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if course.cancel_end_date > datetime.datetime.now() and course.select_end_date > datetime.datetime.now():
                 course.status = Course.STATUS_WAITING
                 session.commit()
-                update_info = True
                 context.application.create_task(query.answer("课程已满，预约补选成功"))
             else:
                 context.application.create_task(query.answer("课程已满，选课失败"))
     except AlreadyChosen:
         context.application.create_task(query.answer("选课失败:已经选过该课程"))
-        update_info = True
     except FailedToChoose as e:
         context.application.create_task(query.answer("选课失败:" + str(e)))
     except ApiException:
         context.application.create_task(query.message.reply_text("选课失败:原因未知"))
-    if update_info:
-        message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
-        context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
+    message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
+    context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -269,24 +263,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     course_id, is_detail = query.data.split(' ')[1:]
     course_id = int(course_id)
-    update_info = False
     current_count = None
     with Session(engine) as session:
         course = session.query(Course).filter(Course.id == course_id).scalar()
         if course.status in [Course.STATUS_BOOKED, Course.STATUS_WAITING]:
             course.status = Course.STATUS_NOT_SELECTED
             session.commit()
-            update_info = True
     try:
         resp = client.del_chosen_course(course_id)
-        update_info = True
         current_count = resp['courseCurrentCount']
         context.application.create_task(query.answer("退课成功"))
     except FailedToDelChosen as e:
         context.application.create_task(query.answer("退课失败:" + str(e)))
-    if update_info:
-        message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
-        context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
+    message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
+    context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
 async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -467,7 +457,5 @@ if __name__ == '__main__':
 
     init_handlers(application)
     init_jobs(application)
-
-    application.job_queue.run_repeating(callback=refresh_course_list, interval=60, first=10)
 
     application.run_polling()

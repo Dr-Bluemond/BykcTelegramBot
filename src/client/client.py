@@ -78,7 +78,13 @@ class Client:
             try:
                 return self._unsafe_call_api(api_name, data)
             except LoginExpired:
-                self.soft_login()
+                while True:
+                    try:
+                        self.soft_login()
+                        break
+                    except LoginError:
+                        time.sleep(1)
+                        continue
                 continue
             except UnknownError as e:
                 time.sleep(1)
