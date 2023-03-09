@@ -221,7 +221,7 @@ async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"handler called: detail")
     query = update.callback_query
     course_id = int(query.data.split(' ')[1])
-    message, reply_markup = __get_message_and_keyboard(course_id, "yes")
+    message, reply_markup = await __get_message_and_keyboard(course_id, "yes")
     await asyncio.gather(query.answer(),
                          query.message.edit_text(message, reply_markup=reply_markup))
 
@@ -259,7 +259,7 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application.create_task(query.answer("选课失败:" + str(e)))
     except ApiException:
         context.application.create_task(query.message.reply_text("选课失败:原因未知"))
-    message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
+    message, reply_markup = await __get_message_and_keyboard(course_id, is_detail, current_count)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
@@ -281,7 +281,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application.create_task(query.answer("退课成功"))
     except FailedToDelChosen as e:
         context.application.create_task(query.answer("退课失败:" + str(e)))
-    message, reply_markup = __get_message_and_keyboard(course_id, is_detail, current_count)
+    message, reply_markup = await __get_message_and_keyboard(course_id, is_detail, current_count)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
