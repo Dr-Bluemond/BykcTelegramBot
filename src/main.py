@@ -456,7 +456,8 @@ def init_jobs(application):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(config.get('telegram_owner_id'), f"【发生错误】\n{context.error}")
+    await context.bot.send_message(config.get('telegram_owner_id'),
+                                   f"【发生错误】\n{context.error}")
 
 
 if __name__ == '__main__':

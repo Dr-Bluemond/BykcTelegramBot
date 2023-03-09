@@ -78,7 +78,6 @@ class Client:
             except LoginExpired:
                 try:
                     await self.login()
-                    break
                 except LoginError as e:
                     last_exception = e
                     await asyncio.sleep(1)
