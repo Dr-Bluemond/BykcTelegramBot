@@ -2,7 +2,8 @@ import datetime
 import logging
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
+    Defaults
 from telegram.ext import filters
 from client import Client, FailedToChoose, AlreadyChosen, CourseIsFull, ApiException, TooEarlyToChoose, \
     FailedToDelChosen
@@ -17,7 +18,6 @@ logging.basicConfig(
 )
 
 client = Client(config.get('sso_username'), config.get('sso_password'))
-client.soft_login()
 
 
 def __brief_info(id, name, position, start_date, end_date, count, status):
@@ -46,12 +46,12 @@ def __detailed_info(id, name, teacher, position, start_date, end_date,
            f"状态：{status}\n"
 
 
-def __get_message_and_keyboard(course_id, is_detail, current_count=None):
+async def __get_message_and_keyboard(course_id, is_detail, current_count=None):
     """
     :param current_count: for some strange reason
     :return:
     """
-    course = client.query_course_by_id(course_id)
+    course = await client.query_course_by_id(course_id)
     id = course['id']
     name = course['courseName']
     teacher = course['courseTeacher']
@@ -153,7 +153,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays what courses are available for selection."""
     logging.info(f"handler called: query_avail")
-    resp = client.query_student_semester_course_by_page(1, 100)
+    resp = await client.query_student_semester_course_by_page(1, 100)
     tasks = []
     for course in resp['content']:
         id = course['id']
@@ -197,7 +197,7 @@ async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays what courses are chosen."""
     logging.info(f"handler called: query_chosen")
-    resp = client.query_chosen_course()
+    resp = await client.query_chosen_course()
     tasks = []
     for course in resp['courseList']:
         course = course['courseInfo']
@@ -234,7 +234,7 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     course_id = int(course_id)
     current_count = None
     try:
-        resp = client.chose_course(course_id)
+        resp = await client.chose_course(course_id)
         context.application.create_task(query.answer("选课成功"))
         current_count = resp['courseCurrentCount']
     except TooEarlyToChoose:
@@ -276,7 +276,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             course.status = Course.STATUS_NOT_SELECTED
             session.commit()
     try:
-        resp = client.del_chosen_course(course_id)
+        resp = await client.del_chosen_course(course_id)
         current_count = resp['courseCurrentCount']
         context.application.create_task(query.answer("退课成功"))
     except FailedToDelChosen as e:
@@ -295,7 +295,7 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
     """Refresh the course list"""
-    resp = client.query_student_semester_course_by_page(1, 100)
+    resp = await client.query_student_semester_course_by_page(1, 100)
     for course in resp['content']:
         id = course['id']
         name = course['courseName']
@@ -310,7 +310,7 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
         count = f"{course['courseCurrentCount']}/{course['courseMaxCount']}"
         selected = course['selected']
         with Session(engine) as session:
-            resp = client.query_student_semester_course_by_page(1, 100)
+            resp = await client.query_student_semester_course_by_page(1, 100)
             course = __query_and_update_model(session, id, name, start_date, end_date,
                                               select_start_date, select_end_date, cancel_end_date, selected)
             match course.status:
@@ -350,7 +350,7 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
         for course in courses:
             if course.select_end_date < datetime.datetime.now():
                 try:
-                    client.chose_course(course.id)
+                    await client.chose_course(course.id)
                     course.status = Course.STATUS_SELECTED
                     session.commit()
                     keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
@@ -396,7 +396,7 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
         if course.status == Course.STATUS_BOOKED:
             while True:
                 try:
-                    client.chose_course(course_id)
+                    await client.chose_course(course_id)
                     course.status = Course.STATUS_SELECTED
                     session.commit()
                     keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
@@ -455,8 +455,13 @@ def init_jobs(application):
             __add_rush_job(application.job_queue, course)
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_message(config.get('telegram_owner_id'), f"【发生错误】\n{context.error}")
+
+
 if __name__ == '__main__':
     application_builder = ApplicationBuilder()
+    application_builder.defaults(Defaults(block=False))
     application_builder.token(config.get('telegram_token'))
     if config.get('proxy_url'):
         application_builder.proxy_url(config.get('proxy_url'))
@@ -464,5 +469,6 @@ if __name__ == '__main__':
 
     init_handlers(application)
     init_jobs(application)
+    application.add_error_handler(error_handler)
 
     application.run_polling()
