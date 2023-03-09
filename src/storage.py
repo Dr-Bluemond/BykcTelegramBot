@@ -5,7 +5,7 @@ import os
 class Storage:
     """
     """
-    path = 'storage.json'
+    path = 'data/storage.json'
 
     def __init__(self):
         if not os.path.exists(self.path):

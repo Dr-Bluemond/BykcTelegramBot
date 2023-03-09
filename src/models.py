@@ -1,4 +1,6 @@
 import datetime
+import os
+
 from sqlalchemy import String
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -28,7 +30,7 @@ class Course(Base):
     STATUS_WAITING = 3  # 预约补选 monitor the capacity until successfully selected
 
 
-engine = create_engine("sqlite:///db.sqlite3", echo=False)
+engine = create_engine("sqlite:///data/db.sqlite3", echo=False)
 
-if __name__ == '__main__':
+if not os.path.exists("data/db.sqlite3"):
     Base.metadata.create_all(engine)

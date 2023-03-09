@@ -31,7 +31,7 @@ class Client:
         if storage.get('token'):
             self.token = storage.get('token')
             if self.session is None:
-                self.session = requests.Session()
+                self.session = requests.session()
             try:
                 result = self._unsafe_get_user_profile()
                 if result['employeeId'] == config.get('sso_username'):
@@ -46,7 +46,7 @@ class Client:
         login through sso
         """
         if self.session is None:
-            self.session = requests.Session()
+            self.session = requests.session()
         url = config.get('bykc_root') + "/casLogin"
         ticket_url = SsoApi(self.session, self.username, self.password).login_sso(url)
         url = ticket_url

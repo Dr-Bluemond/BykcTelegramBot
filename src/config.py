@@ -6,11 +6,12 @@ class Config:
     """
     Config is read-only
     """
-    path = 'config.json'
+    path = 'data/config.json'
     keys = [
         'user_agent', 'bykc_root',
         'sso_username', 'sso_password',
         'telegram_token', 'telegram_owner_id',
+        'proxy_url',
     ]
 
     def __init__(self):

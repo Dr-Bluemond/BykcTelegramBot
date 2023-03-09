@@ -452,7 +452,7 @@ def init_jobs(application):
 if __name__ == '__main__':
     application = ApplicationBuilder() \
         .token(config.get('telegram_token')) \
-        .proxy_url('http://127.0.0.1:7890') \
+        .proxy_url(config.get('proxy_url')) \
         .build()
 
     init_handlers(application)
