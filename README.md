@@ -1,6 +1,6 @@
 # 一个北航博雅课程 TelegramBot
 
-v0.1-alpha.2
+v0.1-alpha.3
 
 ## 介绍
 
