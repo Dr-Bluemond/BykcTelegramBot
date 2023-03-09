@@ -1,10 +1,11 @@
-FROM python:3.11.2-buster
+FROM python:3.11.2-alpine
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
-RUN rm /tmp/requirements.txt
+RUN \
+       pip install -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt \
+    && mkdir /app
 
-RUN mkdir /app
 COPY src app/src
 
 WORKDIR /app

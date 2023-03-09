@@ -71,13 +71,13 @@ def __get_message_and_keyboard(course_id, is_detail, current_count=None):
                                           select_start_date, select_end_date, cancel_end_date, selected)
         match course.status:
             case Course.STATUS_NOT_SELECTED:
-                status = "未选择"
+                status = "⚪️未选择"
             case Course.STATUS_SELECTED:
-                status = "已选中"
+                status = "🟢已选中"
             case Course.STATUS_BOOKED:
-                status = "预约抢选"
+                status = "♥️预约抢选"
             case Course.STATUS_WAITING:
-                status = "预约补选"
+                status = "🕓预约补选"
         if is_detail == "yes":
             message = __detailed_info(id, name, teacher, position, start_date, end_date, select_start_date,
                                       select_end_date, cancel_end_date, count, status)
@@ -141,7 +141,8 @@ def __query_and_update_model(session: Session, id, name, start_date, end_date,
 ### callbacks ###
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = "你好呀~我是北航博雅课程小助手，我可以帮你完成以下操作：\n" \
+    logging.info(f"handler called: start")
+    message = "你好呀~我是北航博雅课程小助手喵！我可以帮你完成以下操作：\n" \
               "/query_avail 查询可选课程\n\n" \
               "/query_chosen 查询已选课程\n\n" \
               "/preferences 修改偏好配置\n\n" \
@@ -151,6 +152,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays what courses are available for selection."""
+    logging.info(f"handler called: query_avail")
     resp = client.query_student_semester_course_by_page(1, 100)
     tasks = []
     for course in resp['content']:
@@ -171,13 +173,13 @@ async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                               select_start_date, select_end_date, cancel_end_date, selected)
             match course.status:
                 case Course.STATUS_NOT_SELECTED:
-                    status = "未选择"
+                    status = "⚪️未选择"
                 case Course.STATUS_SELECTED:
-                    status = "已选中"
+                    status = "🟢已选中"
                 case Course.STATUS_BOOKED:
-                    status = "预约抢选"
+                    status = "♥️预约抢选"
                 case Course.STATUS_WAITING:
-                    status = "预约补选"
+                    status = "🕓预约补选"
 
             message = __brief_info(id, name, position, start_date, end_date, count, status)
             if course.status == Course.STATUS_NOT_SELECTED:
@@ -194,6 +196,7 @@ async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays what courses are chosen."""
+    logging.info(f"handler called: query_chosen")
     resp = client.query_chosen_course()
     tasks = []
     for course in resp['courseList']:
@@ -215,6 +218,7 @@ async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays detail of a course."""
+    logging.info(f"handler called: detail")
     query = update.callback_query
     course_id = int(query.data.split(' ')[1])
     message, reply_markup = __get_message_and_keyboard(course_id, "yes")
@@ -224,6 +228,7 @@ async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Choose a course."""
+    logging.info(f"handler called: choose")
     query = update.callback_query
     course_id, is_detail = query.data.split(' ')[1:]
     course_id = int(course_id)
@@ -260,6 +265,7 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cancel a course"""
+    logging.info(f"handler called: cancel")
     query = update.callback_query
     course_id, is_detail = query.data.split(' ')[1:]
     course_id = int(course_id)
@@ -309,13 +315,13 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
                                               select_start_date, select_end_date, cancel_end_date, selected)
             match course.status:
                 case Course.STATUS_NOT_SELECTED:
-                    status = "未选择"
+                    status = "⚪️未选择"
                 case Course.STATUS_SELECTED:
-                    status = "已选中"
+                    status = "🟢已选中"
                 case Course.STATUS_BOOKED:
-                    status = "预约抢选"
+                    status = "♥️预约抢选"
                 case Course.STATUS_WAITING:
-                    status = "预约补选"
+                    status = "🕓预约补选"
 
             if not course.notified:
                 message = __brief_info(id, name, position, start_date, end_date, count, status)
@@ -450,10 +456,11 @@ def init_jobs(application):
 
 
 if __name__ == '__main__':
-    application = ApplicationBuilder() \
-        .token(config.get('telegram_token')) \
-        .proxy_url(config.get('proxy_url')) \
-        .build()
+    application_builder = ApplicationBuilder()
+    application_builder.token(config.get('telegram_token'))
+    if config.get('proxy_url'):
+        application_builder.proxy_url(config.get('proxy_url'))
+    application = application_builder.build()
 
     init_handlers(application)
     init_jobs(application)
