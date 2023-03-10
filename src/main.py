@@ -7,6 +7,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
     Defaults
 from telegram.ext import filters
+
+import html_process
 from client import Client, FailedToChoose, AlreadyChosen, CourseIsFull, ApiException, TooEarlyToChoose, \
     FailedToDelChosen
 from config import config
@@ -36,6 +38,7 @@ class ReceivedCourseData:
         self.selected = None
         self.current_count = None
         self.max_count = None
+        self.description = None
 
         self.__model_synced = False
         self.__is_notified = None
@@ -150,6 +153,7 @@ class ReceivedCourseData:
             f"选课结束：{self.select_end_date}\n" \
             f"退课截止：{self.cancel_end_date}\n" \
             f"人数：{self.current_count}/{self.max_count}\n" \
+            f"课程简介：\n{self.description}\n" \
             f"状态：{status}\n"
 
     async def refresh(self):
@@ -167,6 +171,7 @@ class ReceivedCourseData:
         self.current_count = data['courseCurrentCount']
         self.max_count = data['courseMaxCount']
         self.selected = data['selected']
+        self.description = html_process.transform(data['courseDesc'])
 
     def get_reply_markup(self, is_detail):
         keyboard = []
