@@ -1,6 +1,8 @@
 import datetime
 import logging
 import asyncio
+
+import telegram.error
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
     Defaults
@@ -20,122 +22,162 @@ logging.basicConfig(
 client = Client(config.get('sso_username'), config.get('sso_password'))
 
 
-def __brief_info(id, name, position, start_date, end_date, count, status):
-    return f"ID：{id}\n" \
-           f"名称：{name}\n" \
-           f"地点：{position}\n" \
-           f"课程开始：{start_date}\n" \
-           f"课程结束：{end_date}\n" \
-           f"人数：{count}\n" \
-           f"状态：{status}\n"
+class ReceivedCourseData:
+    def __init__(self):
+        self.id = None
+        self.name = None
+        self.teacher = None
+        self.position = None
+        self.start_date = None
+        self.end_date = None
+        self.select_start_date = None
+        self.select_end_date = None
+        self.cancel_end_date = None
+        self.selected = None
+        self.current_count = None
+        self.max_count = None
 
+        self.__model_synced = False
+        self.__is_notified = None
+        self.__status = None
 
-def __detailed_info(id, name, teacher, position, start_date, end_date,
-                    select_start_date, select_end_date, cancel_end_date, count, status):
-    return f"【课程详情】\n" \
-           f"ID：{id}\n" \
-           f"名称：{name}\n" \
-           f"教师：{teacher}\n" \
-           f"地点：{position}\n" \
-           f"课程开始：{start_date}\n" \
-           f"课程结束：{end_date}\n" \
-           f"选课开始：{select_start_date}\n" \
-           f"选课结束：{select_end_date}\n" \
-           f"退选截止：{cancel_end_date}\n" \
-           f"人数：{count}\n" \
-           f"状态：{status}\n"
-
-
-async def __get_message_and_keyboard(course_id, is_detail, current_count=None):
-    """
-    :param current_count: for some strange reason
-    :return:
-    """
-    course = await client.query_course_by_id(course_id)
-    id = course['id']
-    name = course['courseName']
-    teacher = course['courseTeacher']
-    position = course['coursePosition']
-    start_date = course['courseStartDate']
-    end_date = course['courseEndDate']
-    select_start_date = course['courseSelectStartDate']
-    select_end_date = course['courseSelectEndDate']
-    cancel_end_date = course['courseCancelEndDate']
-    if current_count is not None:
-        count = f"{current_count}/{course['courseMaxCount']}"
-    else:
-        count = f"{course['courseCurrentCount']}/{course['courseMaxCount']}"
-    selected = course['selected']
-    with Session(engine) as session:
-        course = __query_and_update_model(session, id, name, start_date, end_date,
-                                          select_start_date, select_end_date, cancel_end_date, selected)
-        match course.status:
-            case Course.STATUS_NOT_SELECTED:
-                status = "⚪️未选择"
-            case Course.STATUS_SELECTED:
-                status = "🟢已选中"
-            case Course.STATUS_BOOKED:
-                status = "♥️预约抢选"
-            case Course.STATUS_WAITING:
-                status = "🕓预约补选"
-        if is_detail == "yes":
-            message = __detailed_info(id, name, teacher, position, start_date, end_date, select_start_date,
-                                      select_end_date, cancel_end_date, count, status)
-            if course.status == Course.STATUS_NOT_SELECTED:
-                keyboard = [[InlineKeyboardButton("我要选课", callback_data=f'choose {id} yes')]]
+    def sync_model(self):
+        if self.__model_synced:
+            return
+        with Session(engine) as session:
+            stmt = select(Course).where(Course.id == self.id)
+            course: Course = session.execute(stmt).scalar()
+            start_date = self.start_date and datetime.datetime.strptime(self.start_date, '%Y-%m-%d %H:%M:%S')
+            end_date = self.end_date and datetime.datetime.strptime(self.end_date, '%Y-%m-%d %H:%M:%S')
+            select_start_date = self.select_start_date and datetime.datetime.strptime(self.select_start_date,
+                                                                                      '%Y-%m-%d %H:%M:%S')
+            select_end_date = self.select_end_date and datetime.datetime.strptime(self.select_end_date,
+                                                                                  '%Y-%m-%d %H:%M:%S')
+            cancel_end_date = self.cancel_end_date and datetime.datetime.strptime(self.cancel_end_date,
+                                                                                  '%Y-%m-%d %H:%M:%S')
+            if course is None:
+                if self.selected:
+                    status = Course.STATUS_SELECTED
+                else:
+                    status = Course.STATUS_NOT_SELECTED
+                course = Course(id=self.id, name=self.name, start_date=start_date, end_date=end_date,
+                                select_start_date=select_start_date, select_end_date=select_end_date,
+                                cancel_end_date=cancel_end_date, status=status)
+                self.__is_notified = False
+                self.__status = status
+                session.add(course)
+                session.commit()
             else:
-                keyboard = [[InlineKeyboardButton("我要退课", callback_data=f'cancel {id} yes')]]
-        else:
-            message = __brief_info(id, name, position, start_date, end_date, count, status)
-            if course.status == Course.STATUS_NOT_SELECTED:
-                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                             InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
-            else:
-                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                             InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-    return message, reply_markup
+                course.name = self.name
+                course.start_date = start_date
+                course.end_date = end_date
+                course.select_start_date = select_start_date
+                course.select_end_date = select_end_date
+                course.cancel_end_date = cancel_end_date
+                if self.selected and course.status != Course.STATUS_SELECTED:
+                    course.status = Course.STATUS_SELECTED
+                    session.commit()
+                elif not self.selected and course.status == Course.STATUS_SELECTED:
+                    course.status = Course.STATUS_NOT_SELECTED
+                    session.commit()
+                self.__is_notified = course.notified
+                self.__status = course.status
+            self.__model_synced = True
 
+    def is_notified(self):
+        if not self.__model_synced:
+            self.sync_model()
+        return self.__is_notified
 
-def __query_and_update_model(session: Session, id, name, start_date, end_date,
-                             select_start_date, select_end_date, cancel_end_date, selected):
-    stmt = select(Course).where(Course.id == id)
-    course = session.execute(stmt).scalar()
-    if isinstance(start_date, str):
-        start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
-    if isinstance(end_date, str):
-        end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
-    if isinstance(select_start_date, str):
-        select_start_date = datetime.datetime.strptime(select_start_date, '%Y-%m-%d %H:%M:%S')
-    if isinstance(select_end_date, str):
-        select_end_date = datetime.datetime.strptime(select_end_date, '%Y-%m-%d %H:%M:%S')
-    if isinstance(cancel_end_date, str):
-        cancel_end_date = datetime.datetime.strptime(cancel_end_date, '%Y-%m-%d %H:%M:%S')
-    if course is None:
-        if selected:
-            status = Course.STATUS_SELECTED
-        else:
-            status = Course.STATUS_NOT_SELECTED
-        course = Course(id=id, name=name, start_date=start_date, end_date=end_date,
-                        select_start_date=select_start_date, select_end_date=select_end_date,
-                        cancel_end_date=cancel_end_date, status=status)
-        session.add(course)
-        session.commit()
-    else:
-        course.name = name
-        course.start_date = start_date
-        course.end_date = end_date
-        course.select_start_date = select_start_date
-        course.select_end_date = select_end_date
-        course.cancel_end_date = cancel_end_date
-        if selected and course.status != Course.STATUS_SELECTED:
-            course.status = Course.STATUS_SELECTED
-            session.commit()
-        elif not selected and course.status == Course.STATUS_SELECTED:
-            course.status = Course.STATUS_NOT_SELECTED
+    def set_notified(self, value):
+        self.__is_notified = value
+        with Session(engine) as session:
+            stmt = select(Course).where(Course.id == self.id)
+            course: Course = session.execute(stmt).scalar()
+            course.notified = value
             session.commit()
 
-    return course
+    def get_status(self):
+        if not self.__model_synced:
+            self.sync_model()
+        return self.__status
+
+    def brief_info(self, title=None):
+        if not self.__model_synced:
+            self.sync_model()
+        if self.__status == Course.STATUS_NOT_SELECTED:
+            status = "⚪️未选择"
+        elif self.__status == Course.STATUS_SELECTED:
+            status = "🟢已选中"
+        elif self.__status == Course.STATUS_BOOKED:
+            status = "♥️预约抢选"
+        elif self.__status == Course.STATUS_WAITING:
+            status = "🕓预约补选"
+        else:
+            status = "系统错误"
+
+        return (f"{title}\n" if title else "") + \
+            f"ID：{self.id}\n" \
+            f"名称：{self.name}\n" \
+            f"地点：{self.position}\n" \
+            f"课程开始：{self.start_date}\n" \
+            f"课程结束：{self.end_date}\n" \
+            f"人数：{self.current_count}/{self.max_count}\n" \
+            f"状态：{status}\n"
+
+    def detailed_info(self, title):
+        if not self.__model_synced:
+            self.sync_model()
+        if self.__status == Course.STATUS_NOT_SELECTED:
+            status = "⚪️未选择"
+        elif self.__status == Course.STATUS_SELECTED:
+            status = "🟢已选中"
+        elif self.__status == Course.STATUS_BOOKED:
+            status = "♥️预约抢选"
+        elif self.__status == Course.STATUS_WAITING:
+            status = "🕓预约补选"
+        else:
+            status = "系统错误"
+
+        return (f"{title}\n" if title else "") + \
+            f"ID：{self.id}\n" \
+            f"名称：{self.name}\n" \
+            f"教师：{self.teacher}\n" \
+            f"地点：{self.position}\n" \
+            f"课程开始：{self.start_date}\n" \
+            f"课程结束：{self.end_date}\n" \
+            f"选课开始：{self.select_start_date}\n" \
+            f"选课结束：{self.select_end_date}\n" \
+            f"退课截止：{self.cancel_end_date}\n" \
+            f"人数：{self.current_count}/{self.max_count}\n" \
+            f"状态：{status}\n"
+
+    async def refresh(self):
+        self.__model_synced = False
+        data = await client.query_course_by_id(self.id)
+        self.id = data['id']
+        self.name = data['courseName']
+        self.teacher = data['courseTeacher']
+        self.position = data['coursePosition']
+        self.start_date = data['courseStartDate']
+        self.end_date = data['courseEndDate']
+        self.select_start_date = data['courseSelectStartDate']
+        self.select_end_date = data['courseSelectEndDate']
+        self.cancel_end_date = data['courseCancelEndDate']
+        self.current_count = data['courseCurrentCount']
+        self.max_count = data['courseMaxCount']
+        self.selected = data['selected']
+
+    def get_reply_markup(self, is_detail):
+        keyboard = []
+        if is_detail == "no":
+            keyboard.append(InlineKeyboardButton("查看详情", callback_data=f'detail {self.id}'))
+        if self.get_status() == Course.STATUS_NOT_SELECTED:
+            keyboard.append(InlineKeyboardButton("我要选课", callback_data=f'choose {self.id} {is_detail}'))
+        else:
+            keyboard.append(InlineKeyboardButton("我要退课", callback_data=f'cancel {self.id} {is_detail}'))
+        keyboard = [keyboard]
+        return InlineKeyboardMarkup(keyboard)
 
 
 ### callbacks ###
@@ -156,42 +198,27 @@ async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resp = await client.query_student_semester_course_by_page(1, 100)
     tasks = []
     for course in resp['content']:
-        id = course['id']
-        name = course['courseName']
-        position = course['coursePosition']
-        start_date = course['courseStartDate']
-        end_date = course['courseEndDate']
-        select_start_date = course['courseSelectStartDate']
-        select_end_date = course['courseSelectEndDate']
-        cancel_end_date = course['courseCancelEndDate']
-        if datetime.datetime.now() > datetime.datetime.strptime(select_end_date, '%Y-%m-%d %H:%M:%S'):
+        course_data = ReceivedCourseData()
+        course_data.id = course['id']
+        course_data.name = course['courseName']
+        course_data.position = course['coursePosition']
+        course_data.start_date = course['courseStartDate']
+        course_data.end_date = course['courseEndDate']
+        course_data.select_start_date = course['courseSelectStartDate']
+        course_data.select_end_date = course['courseSelectEndDate']
+        course_data.cancel_end_date = course['courseCancelEndDate']
+        if datetime.datetime.now() > datetime.datetime.strptime(course_data.select_end_date, '%Y-%m-%d %H:%M:%S'):
             continue
-        count = f"{course['courseCurrentCount']}/{course['courseMaxCount']}"
-        selected = course['selected']
-        with Session(engine) as session:
-            course = __query_and_update_model(session, id, name, start_date, end_date,
-                                              select_start_date, select_end_date, cancel_end_date, selected)
-            match course.status:
-                case Course.STATUS_NOT_SELECTED:
-                    status = "⚪️未选择"
-                case Course.STATUS_SELECTED:
-                    status = "🟢已选中"
-                case Course.STATUS_BOOKED:
-                    status = "♥️预约抢选"
-                case Course.STATUS_WAITING:
-                    status = "🕓预约补选"
-
-            message = __brief_info(id, name, position, start_date, end_date, count, status)
-            if course.status == Course.STATUS_NOT_SELECTED:
-                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                             InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
-            else:
-                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                             InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            task = context.application.create_task(update.message.reply_text(message, reply_markup=reply_markup))
-            tasks.append(task)
+        course_data.current_count = course['courseCurrentCount']
+        course_data.max_count = course['courseMaxCount']
+        course_data.selected = course['selected']
+        message = course_data.brief_info()
+        reply_markup = course_data.get_reply_markup("no")
+        task = context.application.create_task(update.message.reply_text(message, reply_markup=reply_markup))
+        tasks.append(task)
     await asyncio.gather(*tasks)
+    if len(tasks) == 0:
+        await update.message.reply_text("未查询到")
 
 
 async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,19 +228,23 @@ async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks = []
     for course in resp['courseList']:
         course = course['courseInfo']
-        id = course['id']
-        name = course['courseName']
-        position = course['coursePosition']
-        start_date = course['courseStartDate']
-        end_date = course['courseEndDate']
-        count = f"{course['courseCurrentCount']}/{course['courseMaxCount']}"
-        message = __brief_info(id, name, position, start_date, end_date, count, "已选中")
-        keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                     InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        course_data = ReceivedCourseData()
+        course_data.id = course['id']
+        course_data.name = course['courseName']
+        course_data.position = course['coursePosition']
+        course_data.start_date = course['courseStartDate']
+        course_data.end_date = course['courseEndDate']
+        course_data.current_count = course['courseCurrentCount']
+        course_data.max_count = course['courseMaxCount']
+        course_data.selected = True
+        await course_data.refresh()
+        message = course_data.brief_info()
+        reply_markup = course_data.get_reply_markup("no")
         task = context.application.create_task(update.message.reply_text(message, reply_markup=reply_markup))
         tasks.append(task)
     await asyncio.gather(*tasks)
+    if len(tasks) == 0:
+        await update.message.reply_text("未查询到")
 
 
 async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -221,7 +252,11 @@ async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"handler called: detail")
     query = update.callback_query
     course_id = int(query.data.split(' ')[1])
-    message, reply_markup = await __get_message_and_keyboard(course_id, "yes")
+    course_data = ReceivedCourseData()
+    course_data.id = course_id
+    await course_data.refresh()
+    message = course_data.detailed_info("【课程详情】")
+    reply_markup = course_data.get_reply_markup("yes")
     await asyncio.gather(query.answer(),
                          query.message.edit_text(message, reply_markup=reply_markup))
 
@@ -259,7 +294,15 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application.create_task(query.answer("选课失败:" + str(e)))
     except ApiException:
         context.application.create_task(query.message.reply_text("选课失败:原因未知"))
-    message, reply_markup = await __get_message_and_keyboard(course_id, is_detail, current_count)
+    course_data = ReceivedCourseData()
+    course_data.id = course_id
+    await course_data.refresh()
+    course_data.current_count = current_count
+    if is_detail == 'no':
+        message = course_data.brief_info()
+    else:
+        message = course_data.detailed_info('【课程详情】')
+    reply_markup = course_data.get_reply_markup(is_detail)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
@@ -281,7 +324,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application.create_task(query.answer("退课成功"))
     except FailedToDelChosen as e:
         context.application.create_task(query.answer("退课失败:" + str(e)))
-    message, reply_markup = await __get_message_and_keyboard(course_id, is_detail, current_count)
+    course_data = ReceivedCourseData()
+    course_data.id = course_id
+    await course_data.refresh()
+    course_data.current_count = current_count
+    if is_detail == 'no':
+        message = course_data.brief_info()
+    else:
+        message = course_data.detailed_info('【课程详情】')
+    reply_markup = course_data.get_reply_markup(is_detail)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
 
@@ -297,58 +348,40 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
     """Refresh the course list"""
     resp = await client.query_student_semester_course_by_page(1, 100)
     for course in resp['content']:
-        id = course['id']
-        name = course['courseName']
-        position = course['coursePosition']
-        start_date = course['courseStartDate']
-        end_date = course['courseEndDate']
-        select_start_date = course['courseSelectStartDate']
-        select_end_date = course['courseSelectEndDate']
-        cancel_end_date = course['courseCancelEndDate']
-        if datetime.datetime.now() > datetime.datetime.strptime(select_end_date, '%Y-%m-%d %H:%M:%S'):
+        course_data = ReceivedCourseData()
+        course_data.id = course['id']
+        course_data.name = course['courseName']
+        course_data.position = course['coursePosition']
+        course_data.start_date = course['courseStartDate']
+        course_data.end_date = course['courseEndDate']
+        course_data.select_start_date = course['courseSelectStartDate']
+        course_data.select_end_date = course['courseSelectEndDate']
+        course_data.cancel_end_date = course['courseCancelEndDate']
+        if datetime.datetime.now() > datetime.datetime.strptime(course_data.select_end_date, '%Y-%m-%d %H:%M:%S'):
             continue
-        count = f"{course['courseCurrentCount']}/{course['courseMaxCount']}"
-        selected = course['selected']
-        with Session(engine) as session:
-            resp = await client.query_student_semester_course_by_page(1, 100)
-            course = __query_and_update_model(session, id, name, start_date, end_date,
-                                              select_start_date, select_end_date, cancel_end_date, selected)
-            match course.status:
-                case Course.STATUS_NOT_SELECTED:
-                    status = "⚪️未选择"
-                case Course.STATUS_SELECTED:
-                    status = "🟢已选中"
-                case Course.STATUS_BOOKED:
-                    status = "♥️预约抢选"
-                case Course.STATUS_WAITING:
-                    status = "🕓预约补选"
-
-            if not course.notified:
-                message = __brief_info(id, name, position, start_date, end_date, count, status)
-                if course.status == Course.STATUS_NOT_SELECTED:
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
-                else:
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                try:
-                    rtv = await context.bot.send_message(
-                        config.get('telegram_owner_id'), "【新的博雅】\n" + message, reply_markup=reply_markup)
-                    course.notified = True
-                    session.commit()
-                except:
-                    # retry in 10 seconds
-                    for job in context.job_queue.get_jobs_by_name('refresh_retry'):
-                        job.schedule_removal()  # prevent job blood
-                    context.job_queue.run_once(refresh_course_list, 10, name='refresh_retry')
+        course_data.current_count = course['courseCurrentCount']
+        course_data.max_count = course['courseMaxCount']
+        course_data.selected = course['selected']
+        course_data.sync_model()
+        if not course_data.is_notified():
+            message = course_data.brief_info('【新的博雅】')
+            reply_markup = course_data.get_reply_markup("no")
+            try:
+                await context.bot.send_message(
+                    config.get('telegram_owner_id'), "【新的博雅】\n" + message, reply_markup=reply_markup)
+                course_data.set_notified(True)
+            except:
+                # retry in 10 seconds
+                for job in context.job_queue.get_jobs_by_name('refresh_retry'):
+                    job.schedule_removal()  # prevent job blood
+                context.job_queue.run_once(refresh_course_list, 10, name='refresh_retry')
 
 
 async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
     with Session(engine) as session:
         courses = session.query(Course).filter(Course.status == Course.STATUS_WAITING).all()
         for course in courses:
-            if course.select_end_date < datetime.datetime.now():
+            if course.select_end_date > datetime.datetime.now():
                 try:
                     await client.chose_course(course.id)
                     course.status = Course.STATUS_SELECTED
@@ -456,6 +489,9 @@ def init_jobs(application):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, telegram.error.BadRequest) and \
+            context.error.message == 'Message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message':
+        return
     await context.bot.send_message(config.get('telegram_owner_id'),
                                    f"【发生错误】\n{context.error}")
 
