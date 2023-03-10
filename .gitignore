@@ -1,4 +1,7 @@
 .idea
+__pycache__
 config.json
 storage.json
 db.sqlite3
+
+test.py

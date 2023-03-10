@@ -7,6 +7,7 @@ from typing import Optional
 import httpx
 
 from . import patterns
+from .exceptions import LoginError
 from config import config
 
 
@@ -18,19 +19,19 @@ class SsoApi:
         self._session: Optional[httpx.AsyncClient] = None
         self._url = ''
 
-    async def _get_execution(self):
+    async def __get_execution(self):
         resp = await self._session.get(self._url, follow_redirects=True)
         result = patterns.execution.search(resp.text)
         assert result, 'unexpected behavior: execution code not retrieved'
         return result.group(1)
 
-    async def _get_login_form(self):
+    async def __get_login_form(self):
         return {
             'username': self._username,
             'password': self._password,
             'submit': '登录',
             'type': 'username_password',
-            'execution': await self._get_execution(),
+            'execution': await self.__get_execution(),
             '_eventId': 'submit',
         }
 
@@ -42,14 +43,18 @@ class SsoApi:
         不同的网站有不同的处理形式
         """
         self._url = url
-        async with httpx.AsyncClient() as self._session:
-            self._session.headers['User-Agent'] = config.get('user_agent')
-            login_form = await self._get_login_form()
-            resp = await self._session.post('https://sso.buaa.edu.cn/login', data=login_form, follow_redirects=False)
-            assert resp.status_code == 302, 'maybe your username or password is invalid'
-            location = resp.headers['Location']
-            logging.info('location: ' + location)
+        try:
+            async with httpx.AsyncClient() as self._session:
+                self._session.headers['User-Agent'] = config.get('user_agent')
+                login_form = await self.__get_login_form()
+                resp = await self._session.post('https://sso.buaa.edu.cn/login', data=login_form, follow_redirects=False)
+                if resp.status_code != 302:
+                    raise LoginError('登录失败:账号密码错误')
+                location = resp.headers['Location']
+                logging.info('location: ' + location)
             return location
+        except httpx.HTTPError:
+            raise LoginError('登录失败:网络错误')
 
 
 async def test():

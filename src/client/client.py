@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 
 import binascii
 import datetime
@@ -10,7 +11,7 @@ from typing import overload
 import httpx
 
 from . import patterns
-from .exceptions import ApiException, LoginError, AlreadyChosen, FailedToChoose, FailedToDelChosen, TooEarlyToChoose, \
+from .exceptions import LoginError, AlreadyChosen, FailedToChoose, FailedToDelChosen, TooEarlyToChoose, \
     LoginExpired, UnknownError, CourseIsFull
 from .sso import SsoApi
 from .crypto import *
@@ -47,49 +48,49 @@ class Client:
         url = config.get('bykc_root') + "/casLogin"
         ticket_url = await SsoApi(self.username, self.password).login_sso(url)
         url = ticket_url
-        async with httpx.AsyncClient() as session:
-            while True:
-                resp = await session.get(url, follow_redirects=False)  # manually redirect
-                searching_token = patterns.token.search(url)
-                if searching_token:
-                    self.token = searching_token.group(1)
-                    print('login success')
-                    storage.set('token', self.token)
-                    break
-                elif resp.status_code in [301, 302]:
-                    url = resp.headers['Location']
-                    continue
-                else:
-                    raise LoginError
+        try:
+            async with httpx.AsyncClient() as session:
+                while True:
+                    resp = await session.get(url, follow_redirects=False)  # manually redirect
+                    searching_token = patterns.token.search(url)
+                    if searching_token:
+                        self.token = searching_token.group(1)
+                        print('login success')
+                        storage.set('token', self.token)
+                        break
+                    elif resp.status_code in [301, 302]:
+                        url = resp.headers['Location']
+                        continue
+                    else:
+                        raise LoginError("登录错误:未找到token")
+        except httpx.HTTPError:
+            raise LoginError("登录错误:网络错误")
 
     def logout(self):
         """
         clear session and logout
         """
         self.token = None
-        self.session = None
 
-    async def _call_api(self, api_name: str, data: dict):
+    async def __call_api(self, api_name: str, data: dict):
         """call api and try to deal with some exceptions"""
         last_exception = None
         for retry in range(3):
             try:
-                return await self._unsafe_call_api(api_name, data)
-            except LoginExpired:
+                return await self.__call_api_raw(api_name, data)
+            except LoginExpired as e:
+                last_exception = e
                 try:
-                    await self.login()
+                    await self.soft_login()
                 except LoginError as e:
                     last_exception = e
                     await asyncio.sleep(1)
-                except Exception as e:
-                    last_exception = e
-                    await asyncio.sleep(0.5)
             except UnknownError as e:
                 last_exception = e
                 await asyncio.sleep(1)
         raise last_exception
 
-    async def _unsafe_call_api(self, api_name: str, data: dict):
+    async def __call_api_raw(self, api_name: str, data: dict):
         """
         an intermediate method to call api which deals with crypto and auth
         :param api_name: could be found in `app.js`
@@ -99,9 +100,9 @@ class Client:
         url = config.get('bykc_root') + '/' + api_name
         data_str = json.dumps(data).encode()
         aes_key = generate_aes_key()
-        ak = rsa_encrypt(aes_key)
+        ak = rsa_encrypt(aes_key).decode()
         data_sign = sign(data_str)
-        sk = rsa_encrypt(data_sign)
+        sk = rsa_encrypt(data_sign).decode()
         ts = str(int(time.time() * 1000))
 
         data_encrypted = base64.b64encode(aes_encrypt(data_str, aes_key))
@@ -110,55 +111,52 @@ class Client:
             'User-Agent': config.get('user_agent'),
             'auth_token': self.token,
             'authtoken': self.token,
-            'ak': ak.decode(),
-            'sk': sk.decode(),
+            'ak': ak,
+            'sk': sk,
             'ts': ts,
         }
 
-        async with httpx.AsyncClient() as session:
-            try:
+        try:
+            async with httpx.AsyncClient() as session:
                 resp = await session.post(url, content=data_encrypted, headers=headers)
-            except httpx.HTTPError:
-                raise UnknownError("failed to connect to server")
-            except Exception as e:
-                print(e)
-                raise UnknownError(e)
-            text = resp.content
-            if resp.status_code != 200:
-                raise UnknownError(f"server panics with http status code: {resp.status_code}")
-            try:
-                message_decode_b64 = base64.b64decode(text)
-            except binascii.Error:
-                raise UnknownError(f"unable to parse response: {text}")
+                text = resp.content
+                if resp.status_code != 200:
+                    raise UnknownError(f"server panics with http status code: {resp.status_code}")
+                try:
+                    message_decode_b64 = base64.b64decode(text)
+                except binascii.Error:
+                    raise UnknownError(f"unable to parse response: {text}")
 
-            try:
-                api_resp = json.loads(aes_decrypt(message_decode_b64, aes_key))
-            except ValueError:
-                raise LoginExpired("failed to decrypt response, it's usually because your login has expired")
+                try:
+                    api_resp = json.loads(aes_decrypt(message_decode_b64, aes_key))
+                except ValueError:
+                    raise LoginExpired("failed to decrypt response, it's usually because your login has expired")
 
-            if api_resp['status'] == '98005399':
-                raise LoginExpired("login expired")
-            elif api_resp['status'] != '0':
-                if api_resp['errmsg'].find('已报名过该课程，请不要重复报名') >= 0:
-                    raise AlreadyChosen("已报名过该课程，请不要重复报名")
-                if api_resp['errmsg'].find('该课程还未开始选课，请耐心等待') >= 0:
-                    raise TooEarlyToChoose("该课程还未开始选课，请耐心等待")
-                if api_resp['errmsg'].find('选课失败，该课程不可选择') >= 0:
-                    raise FailedToChoose('选课失败，该课程不可选择')
-                if api_resp['errmsg'].find('报名失败，该课程人数已满！') >= 0:
-                    raise CourseIsFull("报名失败，该课程人数已满！")
-                if api_resp['errmsg'].find('退选失败，未找到退选课程或已超过退选时间') >= 0:
-                    raise FailedToDelChosen("退选失败，未找到退选课程或已超过退选时间")
-                print(api_resp)
-                raise ApiException(f"server returns a non zero api status code: {api_resp['status']}")
-            return api_resp['data']
+                if api_resp['status'] == '98005399':
+                    raise LoginExpired("login expired")
+                elif api_resp['status'] != '0':
+                    if api_resp['errmsg'].find('已报名过该课程，请不要重复报名') >= 0:
+                        raise AlreadyChosen("已报名过该课程，请不要重复报名")
+                    if api_resp['errmsg'].find('该课程还未开始选课，请耐心等待') >= 0:
+                        raise TooEarlyToChoose("该课程还未开始选课，请耐心等待")
+                    if api_resp['errmsg'].find('选课失败，该课程不可选择') >= 0:
+                        raise FailedToChoose('选课失败，该课程不可选择')
+                    if api_resp['errmsg'].find('报名失败，该课程人数已满！') >= 0:
+                        raise CourseIsFull("报名失败，该课程人数已满！")
+                    if api_resp['errmsg'].find('退选失败，未找到退选课程或已超过退选时间') >= 0:
+                        raise FailedToDelChosen("退选失败，未找到退选课程或已超过退选时间")
+                    raise UnknownError(f"server returns a non zero api status code: {api_resp['status']}")
+                return api_resp['data']
+        except httpx.HTTPError as e:
+            traceback.print_exc()
+            raise UnknownError("网络错误" + str(e))
 
     async def _unsafe_get_user_profile(self):
         """
         get your profile
         :return: an object contains your profile
         """
-        result = await self._unsafe_call_api('getUserProfile', {})
+        result = await self.__call_api_raw('getUserProfile', {})
         return result
 
     async def get_user_profile(self):
@@ -166,7 +164,7 @@ class Client:
         get your profile
         :return: an object contains your profile
         """
-        result = await self._call_api('getUserProfile', {})
+        result = await self.__call_api('getUserProfile', {})
         return result
 
     async def query_student_semester_course_by_page(self, page_number: int, page_size: int):
@@ -176,8 +174,8 @@ class Client:
         :param page_size: page size
         :return: an object contains a list of courses and a total count
         """
-        result = await self._call_api('queryStudentSemesterCourseByPage',
-                                      {'pageNumber': page_number, 'pageSize': page_size})
+        result = await self.__call_api('queryStudentSemesterCourseByPage',
+                                       {'pageNumber': page_number, 'pageSize': page_size})
         return result
 
     async def query_course_by_id(self, course_id: int):
@@ -186,26 +184,26 @@ class Client:
         :param course_id: course id
         :return: an object contains a course
         """
-        result = await self._call_api('queryCourseById', {'id': course_id})
+        result = await self.__call_api('queryCourseById', {'id': course_id})
         return result
 
     async def query_fore_course(self):
         warnings.warn('this api is not officially supported by bykc system, \n'
                       'use query_student_semester_course_by_page instead', DeprecationWarning)
-        result = await self._call_api('queryForeCourse', {})
+        result = await self.__call_api('queryForeCourse', {})
         return result
 
     async def query_selectable_course(self):
         warnings.warn('this api is not officially supported by bykc system, \n'
                       'use query_student_semester_course_by_page instead', DeprecationWarning)
-        result = await self._call_api('querySelectableCourse', {})
+        result = await self.__call_api('querySelectableCourse', {})
         return result
 
     async def get_all_config(self):
         """
         :return: all config contains campus, college, role, semester, term
         """
-        result = await self._call_api('getAllConfig', {})
+        result = await self.__call_api('getAllConfig', {})
         return result
 
     @overload
@@ -249,7 +247,7 @@ class Client:
                     semester = s
                     break
             if semester is None:
-                raise ValueError(f"no such semester: {arg0}")
+                raise UnknownError(f"no such semester: {arg0}")
             semester_start_date = semester['semesterStartDate']
             semester_end_date = semester['semesterEndDate']
             data = {
@@ -261,7 +259,7 @@ class Client:
                 "startDate": arg0.strftime("%Y-%m-%d %H:%M:%S"),
                 "endDate": arg1.strftime("%Y-%m-%d %H:%M:%S")
             }
-        result = await self._call_api('queryChosenCourse', data)
+        result = await self.__call_api('queryChosenCourse', data)
         return result
 
     async def chose_course(self, course_id: int):
@@ -272,7 +270,7 @@ class Client:
         :raise AlreadyChosen: if the course has already been chosen
         :raise FailedToChoose: if failed to choose the course
         """
-        result = await self._call_api('choseCourse', {'courseId': course_id})
+        result = await self.__call_api('choseCourse', {'courseId': course_id})
         return result
 
     async def del_chosen_course(self, course_id: int):
@@ -282,5 +280,5 @@ class Client:
         :return: some useless data if success
         :raise FailedToDelChosen: if failed to delete the chosen course
         """
-        result = await self._call_api('delChosenCourse', {'id': course_id})
+        result = await self.__call_api('delChosenCourse', {'id': course_id})
         return result

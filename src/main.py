@@ -2,11 +2,11 @@ import datetime
 import logging
 import asyncio
 
-import telegram.error
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
     Defaults
 from telegram.ext import filters
+from telegram.error import TelegramError
 
 import html_process
 from client import Client, FailedToChoose, AlreadyChosen, CourseIsFull, ApiException, TooEarlyToChoose, \
@@ -105,7 +105,7 @@ class ReceivedCourseData:
             self.sync_model()
         return self.__status
 
-    def brief_info(self, title=None):
+    def get_info(self, is_detail, title=None):
         if not self.__model_synced:
             self.sync_model()
         if self.__status == Course.STATUS_NOT_SELECTED:
@@ -119,42 +119,29 @@ class ReceivedCourseData:
         else:
             status = "系统错误"
 
-        return (f"{title}\n" if title else "") + \
-            f"ID：{self.id}\n" \
-            f"名称：{self.name}\n" \
-            f"地点：{self.position}\n" \
-            f"课程开始：{self.start_date}\n" \
-            f"课程结束：{self.end_date}\n" \
-            f"人数：{self.current_count}/{self.max_count}\n" \
-            f"状态：{status}\n"
-
-    def detailed_info(self, title):
-        if not self.__model_synced:
-            self.sync_model()
-        if self.__status == Course.STATUS_NOT_SELECTED:
-            status = "⚪️未选择"
-        elif self.__status == Course.STATUS_SELECTED:
-            status = "🟢已选中"
-        elif self.__status == Course.STATUS_BOOKED:
-            status = "♥️预约抢选"
-        elif self.__status == Course.STATUS_WAITING:
-            status = "🕓预约补选"
+        if is_detail == "no":
+            return (f"{title}\n" if title else "") + \
+                f"ID：{self.id}\n" \
+                f"名称：{self.name}\n" \
+                f"地点：{self.position}\n" \
+                f"课程开始：{self.start_date}\n" \
+                f"课程结束：{self.end_date}\n" \
+                f"人数：{self.current_count}/{self.max_count}\n" \
+                f"状态：{status}\n"
         else:
-            status = "系统错误"
-
-        return (f"{title}\n" if title else "") + \
-            f"ID：{self.id}\n" \
-            f"名称：{self.name}\n" \
-            f"教师：{self.teacher}\n" \
-            f"地点：{self.position}\n" \
-            f"课程开始：{self.start_date}\n" \
-            f"课程结束：{self.end_date}\n" \
-            f"选课开始：{self.select_start_date}\n" \
-            f"选课结束：{self.select_end_date}\n" \
-            f"退课截止：{self.cancel_end_date}\n" \
-            f"人数：{self.current_count}/{self.max_count}\n" \
-            f"课程简介：\n{self.description}\n" \
-            f"状态：{status}\n"
+            return (f"{title}\n" if title else "【课程详情】") + \
+                f"ID：{self.id}\n" \
+                f"名称：{self.name}\n" \
+                f"教师：{self.teacher}\n" \
+                f"地点：{self.position}\n" \
+                f"课程开始：{self.start_date}\n" \
+                f"课程结束：{self.end_date}\n" \
+                f"选课开始：{self.select_start_date}\n" \
+                f"选课结束：{self.select_end_date}\n" \
+                f"退课截止：{self.cancel_end_date}\n" \
+                f"人数：{self.current_count}/{self.max_count}\n" \
+                f"课程简介：\n{self.description}\n" \
+                f"状态：{status}\n"
 
     async def refresh(self):
         self.__model_synced = False
@@ -217,7 +204,7 @@ async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         course_data.current_count = course['courseCurrentCount']
         course_data.max_count = course['courseMaxCount']
         course_data.selected = course['selected']
-        message = course_data.brief_info()
+        message = course_data.get_info(is_detail="no")
         reply_markup = course_data.get_reply_markup("no")
         task = context.application.create_task(update.message.reply_text(message, reply_markup=reply_markup))
         tasks.append(task)
@@ -239,11 +226,13 @@ async def query_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         course_data.position = course['coursePosition']
         course_data.start_date = course['courseStartDate']
         course_data.end_date = course['courseEndDate']
+        course_data.select_start_date = course['courseSelectStartDate']
+        course_data.select_end_date = course['courseSelectEndDate']
+        course_data.cancel_end_date = course['courseCancelEndDate']
         course_data.current_count = course['courseCurrentCount']
         course_data.max_count = course['courseMaxCount']
         course_data.selected = True
-        await course_data.refresh()
-        message = course_data.brief_info()
+        message = course_data.get_info(is_detail="no")
         reply_markup = course_data.get_reply_markup("no")
         task = context.application.create_task(update.message.reply_text(message, reply_markup=reply_markup))
         tasks.append(task)
@@ -260,7 +249,7 @@ async def detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     course_data = ReceivedCourseData()
     course_data.id = course_id
     await course_data.refresh()
-    message = course_data.detailed_info("【课程详情】")
+    message = course_data.get_info(is_detail="yes")
     reply_markup = course_data.get_reply_markup("yes")
     await asyncio.gather(query.answer(),
                          query.message.edit_text(message, reply_markup=reply_markup))
@@ -303,10 +292,7 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     course_data.id = course_id
     await course_data.refresh()
     course_data.current_count = current_count
-    if is_detail == 'no':
-        message = course_data.brief_info()
-    else:
-        message = course_data.detailed_info('【课程详情】')
+    message = course_data.get_info(is_detail=is_detail)
     reply_markup = course_data.get_reply_markup(is_detail)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
@@ -333,10 +319,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     course_data.id = course_id
     await course_data.refresh()
     course_data.current_count = current_count
-    if is_detail == 'no':
-        message = course_data.brief_info()
-    else:
-        message = course_data.detailed_info('【课程详情】')
+    message = course_data.get_info(is_detail=is_detail)
     reply_markup = course_data.get_reply_markup(is_detail)
     context.application.create_task(update.callback_query.message.edit_text(message, reply_markup=reply_markup))
 
@@ -369,11 +352,11 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
         course_data.selected = course['selected']
         course_data.sync_model()
         if not course_data.is_notified():
-            message = course_data.brief_info('【新的博雅】')
+            message = course_data.get_info(is_detail="no", title='【新的博雅】')
             reply_markup = course_data.get_reply_markup("no")
             try:
                 await context.bot.send_message(
-                    config.get('telegram_owner_id'), "【新的博雅】\n" + message, reply_markup=reply_markup)
+                    config.get('telegram_owner_id'), message, reply_markup=reply_markup)
                 course_data.set_notified(True)
             except:
                 # retry in 10 seconds
@@ -396,17 +379,15 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(config.get('telegram_owner_id'), f"【补选成功】\n{course.name}",
                                                    reply_markup=reply_markup)
-                    continue
                 except ApiException:
-                    pass
-                if course.cancel_end_date < datetime.datetime.now():
-                    course.status = Course.STATUS_NOT_SELECTED
-                    session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await context.bot.send_message(config.get('telegram_owner_id'), f"【补选失败】\n{course.name}",
-                                                   reply_markup=reply_markup)
+                    if course.cancel_end_date < datetime.datetime.now():
+                        course.status = Course.STATUS_NOT_SELECTED
+                        session.commit()
+                        keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
+                                     InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        await context.bot.send_message(config.get('telegram_owner_id'), f"【补选失败】\n{course.name}",
+                                                       reply_markup=reply_markup)
             else:
                 course.status = Course.STATUS_NOT_SELECTED
                 session.commit()
@@ -421,10 +402,13 @@ def __add_rush_job(job_queue, course):
     select_start_date = course.select_start_date
     select_date = select_start_date - datetime.timedelta(seconds=10)
     if datetime.datetime.now() > select_date:
-        job_queue.run_once(rush_select, 0, name=f'rush_select_{course.id}', data=course.id)
+        job_queue.run_once(rush_select, 0, name=f'rush_select_{course.id}', data=course.id, job_kwargs={
+            'misfire_grace_time': None  # no matter how late, run it immediately
+        })
     else:
-        job_queue.run_once(rush_select, select_date, name=f'rush_select_{course.id}',
-                           data=course.id)
+        job_queue.run_once(rush_select, select_date, name=f'rush_select_{course.id}', data=course.id, job_kwargs={
+            'misfire_grace_time': None  # no matter how late, run it immediately
+        })
 
 
 async def rush_select(context: ContextTypes.DEFAULT_TYPE):
@@ -484,8 +468,8 @@ def init_handlers(application):
 
 
 def init_jobs(application):
-    application.job_queue.run_repeating(refresh_course_list, 600, first=10, name='refresh')
-    application.job_queue.run_repeating(wait_for_others_cancellation, 60, name='wait_for_others_cancellation')
+    application.job_queue.run_repeating(refresh_course_list, 300, first=10, name='refresh')
+    application.job_queue.run_repeating(wait_for_others_cancellation, 30, first=10, name='wait_for_others_cancellation')
 
     with Session(engine) as session:
         courses = session.query(Course).filter(Course.status == Course.STATUS_BOOKED).all()
@@ -494,16 +478,17 @@ def init_jobs(application):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    if isinstance(context.error, telegram.error.BadRequest) and \
-            context.error.message == 'Message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message':
-        return
-    await context.bot.send_message(config.get('telegram_owner_id'),
-                                   f"【发生错误】\n{context.error}")
+    if isinstance(context.error, ApiException):
+        await context.bot.send_message(config.get('telegram_owner_id'),
+                                       f"【与博雅服务器交互时发生错误】\n{context.error}")
+    elif not isinstance(context.error, TelegramError):
+        await context.bot.send_message(config.get('telegram_owner_id'),
+                                       f"【未知错误】\n{context.error}")
 
 
 if __name__ == '__main__':
     application_builder = ApplicationBuilder()
-    application_builder.defaults(Defaults(block=False))
+    application_builder.defaults(Defaults(block=False, parse_mode='HTML'))
     application_builder.token(config.get('telegram_token'))
     if config.get('proxy_url'):
         application_builder.proxy_url(config.get('proxy_url'))
