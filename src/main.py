@@ -369,13 +369,14 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
     with Session(engine) as session:
         courses = session.query(Course).filter(Course.status == Course.STATUS_WAITING).all()
         for course in courses:
+            course_id = course.id
             if course.select_end_date > datetime.datetime.now():
                 try:
-                    await client.chose_course(course.id)
+                    await client.chose_course(course_id)
                     course.status = Course.STATUS_SELECTED
                     session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
+                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(config.get('telegram_owner_id'), f"【补选成功】\n{course.name}",
                                                    reply_markup=reply_markup)
@@ -383,16 +384,16 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
                     if course.cancel_end_date < datetime.datetime.now():
                         course.status = Course.STATUS_NOT_SELECTED
                         session.commit()
-                        keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                     InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
+                        keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                                     InlineKeyboardButton("我要选课", callback_data=f'choose {course_id} no')]]
                         reply_markup = InlineKeyboardMarkup(keyboard)
                         await context.bot.send_message(config.get('telegram_owner_id'), f"【补选失败】\n{course.name}",
                                                        reply_markup=reply_markup)
             else:
                 course.status = Course.STATUS_NOT_SELECTED
                 session.commit()
-                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                             InlineKeyboardButton("我要选课", callback_data=f'choose {id} no')]]
+                keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                             InlineKeyboardButton("我要选课", callback_data=f'choose {course_id} no')]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await context.bot.send_message(config.get('telegram_owner_id'), f"【补选失败】\n{course.name}",
                                                reply_markup=reply_markup)
@@ -421,8 +422,8 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
                     await client.chose_course(course_id)
                     course.status = Course.STATUS_SELECTED
                     session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
+                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(config.get('telegram_owner_id'), f"【抢选成功】\n{course.name}",
                                                    reply_markup=reply_markup)
@@ -436,8 +437,8 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
                 except CourseIsFull:
                     course.status = Course.STATUS_WAITING
                     session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {id} no')]]
+                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     await context.bot.send_message(config.get('telegram_owner_id'),
                                                    f"【抢选失败】\n{course.name}\n已自动进入补选模式",
