@@ -415,16 +415,20 @@ def __add_rush_job(job_queue, course):
 
 async def __rush_select_one(course_id, finish_event: asyncio.Future):
     try:
-        try:
-            await client.chose_course(course_id)
+        result = await client.chose_course(course_id)
+        print(result)
+        if not finish_event.done():
             finish_event.set_result(True)
-        except AlreadyChosen as e:
+    except AlreadyChosen as e:
+        print(e)
+        if not finish_event.done():
             finish_event.set_result(True)
-        except CourseIsFull as e:
+    except CourseIsFull as e:
+        print(e)
+        if not finish_event.done():
             finish_event.set_exception(e)
-        except Exception as e:
-            pass
-    except InvalidStateError:  # result is set by other coroutine
+    except Exception as e:
+        print(e)
         pass
 
 
@@ -439,10 +443,8 @@ async def __rush_select_generator(course_id,
     while not finish_event.done() and datetime.datetime.now() < select_start_date + TIMEOUT:
         asyncio.create_task(__rush_select_one(course_id, finish_event))
         await asyncio.sleep(0.5)
-    try:
+    if not finish_event.done():
         finish_event.set_exception(TimeoutError())
-    except InvalidStateError:  # result is set by other coroutine
-        pass
 
 
 async def rush_select(context: ContextTypes.DEFAULT_TYPE):
@@ -456,6 +458,7 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
         finish_event = asyncio.Future()
         asyncio.create_task(__rush_select_generator(course_id, select_start_date, finish_event))
         try:
+            await finish_event
             finish_event.result()
             course.status = Course.STATUS_SELECTED
             session.commit()
