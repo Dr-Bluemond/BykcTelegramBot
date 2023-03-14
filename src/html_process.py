@@ -31,7 +31,7 @@ def walkChildren(node: bs4.Tag, result: List[str]):
 
 
 def remove_continuous_newline(text: str) -> str:
-    return re.compile(r'\s(\n\s*)+').sub('\n\n', text)
+    return re.compile(r'\s*\n\s*').sub('\n\n', text)
 
 
 def transform(s: str) -> str:

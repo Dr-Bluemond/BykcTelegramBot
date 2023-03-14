@@ -1,6 +1,7 @@
 import datetime
 import logging
 import asyncio
+from asyncio import InvalidStateError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
@@ -401,7 +402,7 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
 
 def __add_rush_job(job_queue, course):
     select_start_date = course.select_start_date
-    select_date = select_start_date - datetime.timedelta(seconds=10)
+    select_date = select_start_date - datetime.timedelta(seconds=60)
     if datetime.datetime.now() > select_date:
         job_queue.run_once(rush_select, 0, name=f'rush_select_{course.id}', data=course.id, job_kwargs={
             'misfire_grace_time': None  # no matter how late, run it immediately
@@ -412,40 +413,75 @@ def __add_rush_job(job_queue, course):
         })
 
 
+async def __rush_select_one(course_id, finish_event: asyncio.Future):
+    try:
+        try:
+            await client.chose_course(course_id)
+            finish_event.set_result(True)
+        except AlreadyChosen as e:
+            finish_event.set_result(True)
+        except CourseIsFull as e:
+            finish_event.set_exception(e)
+        except Exception as e:
+            pass
+    except InvalidStateError:  # result is set by other coroutine
+        pass
+
+
+async def __rush_select_generator(course_id,
+                                  select_start_date: datetime.datetime,
+                                  finish_event: asyncio.Future):
+    TIMEOUT = datetime.timedelta(seconds=30)
+    now = datetime.datetime.now()
+    select_date = select_start_date - datetime.timedelta(seconds=10)
+    if now < select_date:
+        await asyncio.sleep((select_date - now).total_seconds())
+    while not finish_event.done() and datetime.datetime.now() < select_start_date + TIMEOUT:
+        asyncio.create_task(__rush_select_one(course_id, finish_event))
+        await asyncio.sleep(0.5)
+    try:
+        finish_event.set_exception(TimeoutError())
+    except InvalidStateError:  # result is set by other coroutine
+        pass
+
+
 async def rush_select(context: ContextTypes.DEFAULT_TYPE):
     course_id = context.job.data
     with Session(engine) as session:
         course = session.query(Course).filter(Course.id == course_id).scalar()
-        if course.status == Course.STATUS_BOOKED:
-            while True:
-                try:
-                    await client.chose_course(course_id)
-                    course.status = Course.STATUS_SELECTED
-                    session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await context.bot.send_message(config.get('telegram_owner_id'), f"【抢选成功】\n{course.name}",
-                                                   reply_markup=reply_markup)
-                    break
-                except TooEarlyToChoose:
-                    await asyncio.sleep(0.5)
-                except AlreadyChosen:
-                    course.status = Course.STATUS_SELECTED
-                    session.commit()
-                    break
-                except CourseIsFull:
-                    course.status = Course.STATUS_WAITING
-                    session.commit()
-                    keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
-                                 InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await context.bot.send_message(config.get('telegram_owner_id'),
-                                                   f"【抢选失败】\n{course.name}\n已自动进入补选模式",
-                                                   reply_markup=reply_markup)
-                    break
-                except ApiException:
-                    await asyncio.sleep(0.5)
+        if course.status != Course.STATUS_BOOKED:
+            return
+        await context.bot.send_message(config.get('telegram_owner_id'), f"【抢选即将开始】\n{course.name}")
+        select_start_date = course.select_start_date
+        finish_event = asyncio.Future()
+        asyncio.create_task(__rush_select_generator(course_id, select_start_date, finish_event))
+        try:
+            finish_event.result()
+            course.status = Course.STATUS_SELECTED
+            session.commit()
+            keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                         InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(config.get('telegram_owner_id'), f"【抢选成功】\n{course.name}",
+                                           reply_markup=reply_markup)
+        except CourseIsFull:
+            course.status = Course.STATUS_WAITING
+            session.commit()
+            keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                         InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(config.get('telegram_owner_id'),
+                                           f"【抢选失败：课程已满】\n{course.name}\n已自动进入补选模式",
+                                           reply_markup=reply_markup)
+        except TimeoutError:
+            course.status = Course.STATUS_WAITING
+            session.commit()
+            keyboard = [[InlineKeyboardButton("查看详情", callback_data=f'detail {course_id}'),
+                         InlineKeyboardButton("我要退课", callback_data=f'cancel {course_id} no')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await context.bot.send_message(config.get('telegram_owner_id'),
+                                           f"【抢选失败：超时】\n{course.name}\n已自动进入补选模式",
+                                           reply_markup=reply_markup)
 
 
 def init_handlers(application):
