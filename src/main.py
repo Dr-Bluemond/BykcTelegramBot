@@ -87,10 +87,9 @@ class ReceivedCourseData:
                 course.cancel_end_date = cancel_end_date
                 if self.selected and course.status != Course.STATUS_SELECTED:
                     course.status = Course.STATUS_SELECTED
-                    session.commit()
                 elif not self.selected and course.status == Course.STATUS_SELECTED:
                     course.status = Course.STATUS_NOT_SELECTED
-                    session.commit()
+                session.commit()
                 self.__notified = course.notified
                 self.__status = course.status
         self.__model_synced = True
