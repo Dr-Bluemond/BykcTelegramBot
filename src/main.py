@@ -139,10 +139,11 @@ class ReceivedCourseData:
                 f"地点：{self.position}\n" \
                 f"课程开始：{self.start_date}\n" \
                 f"课程结束：{self.end_date}\n" \
+                f"选课开始：{self.select_start_date}\n" \
                 f"人数：{self.current_count}/{self.max_count}\n" \
                 f"状态：{status}\n"
         else:
-            return (f"{title}\n" if title else "【课程详情】") + \
+            return (f"{title}\n" if title else "【课程详情】\n") + \
                 f"ID：{self.id}\n" \
                 f"名称：{self.name}\n" \
                 f"教师：{self.teacher}\n" \
