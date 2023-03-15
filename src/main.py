@@ -1,7 +1,6 @@
 import datetime
 import logging
 import asyncio
-from asyncio import InvalidStateError
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, \
@@ -42,10 +41,16 @@ class ReceivedCourseData:
         self.description = None
 
         self.__model_synced = False
-        self.__is_notified = None
+        self.__notified = None
+        self.__select_start_date_changed = False
         self.__status = None
 
     def sync_model(self):
+        """
+        sync model in database
+        after which we know `__is_notified`, `__is_select_start_date_changed`, `__status`
+        :return:
+        """
         if self.__model_synced:
             return
         with Session(engine) as session:
@@ -67,7 +72,7 @@ class ReceivedCourseData:
                 course = Course(id=self.id, name=self.name, start_date=start_date, end_date=end_date,
                                 select_start_date=select_start_date, select_end_date=select_end_date,
                                 cancel_end_date=cancel_end_date, status=status)
-                self.__is_notified = False
+                self.__notified = False
                 self.__status = status
                 session.add(course)
                 session.commit()
@@ -75,6 +80,8 @@ class ReceivedCourseData:
                 course.name = self.name
                 course.start_date = start_date
                 course.end_date = end_date
+                if course.select_start_date != select_start_date:
+                    self.__select_start_date_changed = True
                 course.select_start_date = select_start_date
                 course.select_end_date = select_end_date
                 course.cancel_end_date = cancel_end_date
@@ -84,17 +91,17 @@ class ReceivedCourseData:
                 elif not self.selected and course.status == Course.STATUS_SELECTED:
                     course.status = Course.STATUS_NOT_SELECTED
                     session.commit()
-                self.__is_notified = course.notified
+                self.__notified = course.notified
                 self.__status = course.status
-            self.__model_synced = True
+        self.__model_synced = True
 
     def is_notified(self):
         if not self.__model_synced:
             self.sync_model()
-        return self.__is_notified
+        return self.__notified
 
     def set_notified(self, value):
-        self.__is_notified = value
+        self.__notified = value
         with Session(engine) as session:
             stmt = select(Course).where(Course.id == self.id)
             course: Course = session.execute(stmt).scalar()
@@ -105,6 +112,11 @@ class ReceivedCourseData:
         if not self.__model_synced:
             self.sync_model()
         return self.__status
+
+    def is_select_start_date_changed(self):
+        if not self.__model_synced:
+            self.sync_model()
+        return self.__select_start_date_changed
 
     def get_info(self, is_detail, title=None):
         if not self.__model_synced:
@@ -272,7 +284,7 @@ async def choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
             course = session.query(Course).filter(Course.id == course_id).first()
             course.status = Course.STATUS_BOOKED
             session.commit()
-            __add_rush_job(context.job_queue, course)
+            __add_rush_job(context.job_queue, course.id, course.select_start_date)
             context.application.create_task(query.answer("还未开始，预约选课成功"))
     except CourseIsFull:
         with Session(engine) as session:
@@ -352,6 +364,9 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
         course_data.max_count = course['courseMaxCount']
         course_data.selected = course['selected']
         course_data.sync_model()
+        if course_data.is_select_start_date_changed():
+            __add_rush_job(context.job_queue, course.id,
+                           datetime.datetime.strptime(course_data.select_start_date, '%Y-%m-%d %H:%M:%S'))
         if not course_data.is_notified():
             message = course_data.get_info(is_detail="no", title='【新的博雅】')
             reply_markup = course_data.get_reply_markup("no")
@@ -400,15 +415,17 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
                                                reply_markup=reply_markup)
 
 
-def __add_rush_job(job_queue, course):
-    select_start_date = course.select_start_date
+def __add_rush_job(job_queue, course_id, select_start_date):
+    job_name = f'rush_select_{course_id}'
+    for exist in job_queue.get_jobs_by_name(job_name):
+        exist.schedule_removal()
     select_date = select_start_date - datetime.timedelta(seconds=60)
     if datetime.datetime.now() > select_date:
-        job_queue.run_once(rush_select, 0, name=f'rush_select_{course.id}', data=course.id, job_kwargs={
+        job_queue.run_once(rush_select, 0, name=job_name, data=course_id, job_kwargs={
             'misfire_grace_time': None  # no matter how late, run it immediately
         })
     else:
-        job_queue.run_once(rush_select, select_date, name=f'rush_select_{course.id}', data=course.id, job_kwargs={
+        job_queue.run_once(rush_select, select_date, name=job_name, data=course_id, job_kwargs={
             'misfire_grace_time': None  # no matter how late, run it immediately
         })
 
