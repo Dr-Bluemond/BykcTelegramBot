@@ -364,7 +364,7 @@ async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
         course_data.max_count = course['courseMaxCount']
         course_data.selected = course['selected']
         course_data.sync_model()
-        if course_data.is_select_start_date_changed():
+        if course_data.is_select_start_date_changed() and course_data.get_status() == Course.STATUS_BOOKED:
             __add_rush_job(context.job_queue, course_data.id,
                            datetime.datetime.strptime(course_data.select_start_date, '%Y-%m-%d %H:%M:%S'))
         if not course_data.is_notified():
