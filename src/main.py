@@ -531,7 +531,7 @@ def init_jobs(application):
     with Session(engine) as session:
         courses = session.query(Course).filter(Course.status == Course.STATUS_BOOKED).all()
         for course in courses:
-            __add_rush_job(application.job_queue, course)
+            __add_rush_job(application.job_queue, course.id, course.select_start_date)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
