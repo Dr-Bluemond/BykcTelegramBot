@@ -58,6 +58,10 @@ v0.1.1
 
 ![](img/img0.jpg)
 
+## Thanks
+
+with special thanks to the open source project [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot/)
+
 
 ## 演示
 ![](img/img1.jpg)
