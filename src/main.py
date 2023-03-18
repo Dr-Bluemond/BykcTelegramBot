@@ -415,7 +415,7 @@ async def wait_for_others_cancellation(context: ContextTypes.DEFAULT_TYPE):
                                                reply_markup=reply_markup)
 
 
-def __add_rush_job(job_queue, course_id, select_start_date):
+def __add_rush_job(job_queue, course_id, select_start_date: datetime.datetime):
     job_name = f'rush_select_{course_id}'
     for exist in job_queue.get_jobs_by_name(job_name):
         exist.schedule_removal()
@@ -470,7 +470,9 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
         course = session.query(Course).filter(Course.id == course_id).scalar()
         if course.status != Course.STATUS_BOOKED:
             return
-        await context.bot.send_message(config.get('telegram_owner_id'), f"【抢选即将开始】\n{course.name}")
+        context.application.create_task(
+            context.bot.send_message(config.get('telegram_owner_id'), f"【抢选即将开始】\n{course.name}")
+        )
         select_start_date = course.select_start_date
         finish_event = asyncio.Future()
         asyncio.create_task(__rush_select_generator(course_id, select_start_date, finish_event))
@@ -545,7 +547,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     application_builder = ApplicationBuilder()
-    application_builder.defaults(Defaults(block=False, parse_mode='HTML'))
+    application_builder.defaults(Defaults(
+        block=False,
+        parse_mode='HTML',
+        tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+    ))
     application_builder.token(config.get('telegram_token'))
     if config.get('proxy_url'):
         application_builder.proxy_url(config.get('proxy_url'))
