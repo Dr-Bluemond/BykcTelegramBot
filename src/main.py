@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import asyncio
 
@@ -433,33 +434,34 @@ def __add_rush_job(job_queue, course_id, select_start_date: datetime.datetime):
 async def __rush_select_one(course_id, finish_event: asyncio.Future):
     try:
         result = await client.chose_course(course_id)
-        print(result)
+        logging.info("Success: " + json.dumps(result))
         if not finish_event.done():
             finish_event.set_result(True)
     except AlreadyChosen as e:
-        print(e)
+        logging.info("Success: " + repr(e))
         if not finish_event.done():
             finish_event.set_result(True)
     except CourseIsFull as e:
-        print(e)
+        logging.info("FailAndExit: " + repr(e))
         if not finish_event.done():
             finish_event.set_exception(e)
     except Exception as e:
-        print(e)
+        logging.info("Fail: " + repr(e))
         pass
 
 
 async def __rush_select_generator(course_id,
                                   select_start_date: datetime.datetime,
                                   finish_event: asyncio.Future):
-    TIMEOUT = datetime.timedelta(seconds=30)
+    TIMEOUT = datetime.timedelta(seconds=60)
+    RETRY_INTERVAL = 0.5
     now = datetime.datetime.now()
     select_date = select_start_date - datetime.timedelta(seconds=10)
     if now < select_date:
         await asyncio.sleep((select_date - now).total_seconds())
     while not finish_event.done() and datetime.datetime.now() < select_start_date + TIMEOUT:
         asyncio.create_task(__rush_select_one(course_id, finish_event))
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(RETRY_INTERVAL)
     if not finish_event.done():
         finish_event.set_exception(TimeoutError())
 
