@@ -519,7 +519,7 @@ async def rush_select(context: ContextTypes.DEFAULT_TYPE):
 
 def add_remind_job(job_queue, course_id, start_date: datetime.datetime):
     job_name = f'remind_{course_id}'
-    remind_date = start_date - datetime.timedelta(minutes=60)
+    remind_date = start_date - datetime.timedelta(minutes=20)
     for exist in job_queue.get_jobs_by_name(job_name):
         exist.schedule_removal()
     if datetime.datetime.now() > remind_date:
