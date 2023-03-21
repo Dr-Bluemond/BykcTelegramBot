@@ -28,6 +28,14 @@ class Course(Base):
     STATUS_SELECTED = 1  # 已选上 selected
     STATUS_BOOKED = 2  # 预约抢选 wait for selection time and try to select
     STATUS_WAITING = 3  # 预约补选 monitor the capacity until successfully selected
+    STATUS_FINISHED = 4  # 已选上并且已经提醒用户 selected and notified
+
+    # STATUS TRANSITION:
+    # 0 ---> {1, 2, 3}
+    # 1 ---> {0, 4}
+    # 2 ---> {0, 1, 3}
+    # 3 ---> {0, 1}
+    # 4 ---> {}
 
 
 engine = create_engine("sqlite:///data/db.sqlite3", echo=False)
