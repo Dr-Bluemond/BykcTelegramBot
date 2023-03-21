@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import traceback
 
 import binascii
@@ -81,6 +82,7 @@ class Client:
             try:
                 return await self.__call_api_raw(api_name, data)
             except LoginExpired as e:
+                logging.info('login expired, retrying...' + repr(e))
                 last_exception = e
                 try:
                     await self.login()

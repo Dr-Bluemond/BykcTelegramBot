@@ -355,7 +355,7 @@ async def reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refresh_course_list(context: ContextTypes.DEFAULT_TYPE):
     """Refresh the course list"""
-    resp = await client.query_student_semester_course_by_page(1, 100)
+    resp = await client.query_student_semester_course_by_page(1, 20)
     for course in resp['content']:
         course_data = ReceivedCourseData()
         course_data.id = course['id']
