@@ -132,6 +132,8 @@ class ReceivedCourseData:
             status = "♥️预约抢选"
         elif self.__status == Course.STATUS_WAITING:
             status = "🕓预约补选"
+        elif self.__status == Course.STATUS_FINISHED:
+            status = "🟢已完成"
         else:
             status = "系统错误"
 
