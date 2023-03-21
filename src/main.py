@@ -585,7 +585,7 @@ def init_jobs(application):
         for course in courses:
             add_rush_job(application.job_queue, course.id, course.select_start_date)
 
-        courses = session.query(Course).filter(Course.status == Course.STATUS_FINISHED).all()
+        courses = session.query(Course).filter(Course.status == Course.STATUS_SELECTED).all()
         for course in courses:
             add_remind_job(application.job_queue, course.id, course.start_date)
 
