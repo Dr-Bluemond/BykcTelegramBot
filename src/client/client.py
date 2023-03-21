@@ -25,6 +25,8 @@ class Client:
         self.username = username
         self.password = password
         self.token: str = ''
+        if storage.get('token'):
+            self.token = storage.get('token')
 
     async def soft_login(self):
         """
@@ -81,7 +83,7 @@ class Client:
             except LoginExpired as e:
                 last_exception = e
                 try:
-                    await self.soft_login()
+                    await self.login()
                 except LoginError as e:
                     last_exception = e
                     await asyncio.sleep(1)
