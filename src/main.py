@@ -206,7 +206,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def query_avail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays what courses are available for selection."""
     logging.info(f"handler called: query_avail")
-    resp = await client.query_student_semester_course_by_page(1, 100)
+    resp = await client.query_student_semester_course_by_page(1, 20)
     tasks = []
     for course in resp['content']:
         course_data = ReceivedCourseData()
