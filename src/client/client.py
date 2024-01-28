@@ -26,15 +26,15 @@ class Client:
         self.username = username
         self.password = password
         self.token: str = ''
-        if storage.get('token'):
-            self.token = storage.get('token')
+        self.zero_trust_engine: str = ''
 
     async def soft_login(self):
         """
         first try to login with token that is stored in config file, if failed, login with username and password
         """
-        if storage.get('token'):
+        if storage.get('token') and storage.get('zero_trust_engine'):
             self.token = storage.get('token')
+            self.zero_trust_engine = storage.get('zero_trust_engine')
             try:
                 result = await self._unsafe_get_user_profile()
                 if result['employeeId'] == config.get('sso_username'):
@@ -48,18 +48,30 @@ class Client:
         """
         login through sso
         """
-        url = config.get('bykc_root') + "/casLogin"
-        ticket_url = await SsoApi(self.username, self.password).login_sso(url)
-        url = ticket_url
         try:
             async with httpx.AsyncClient() as session:
+                # 第一次调用SSO登录，获取所谓ZeroTrustEngine的Cookie
+                url = config.get('bykc_root') + "/system/home"
+                url = await SsoApi(self.username, self.password).login_sso(url)
+                await session.get(url, follow_redirects=False)  # manually redirect
+                if not session.cookies.get('ZeroTrustEngine'):
+                    raise LoginError("登录错误:未找到ZeroTrustEngine")
+                self.zero_trust_engine = session.cookies.get('ZeroTrustEngine')
+                storage.set('zero_trust_engine', self.zero_trust_engine)
+
+                # 第二次调用SSO登录，获取所谓token
+                url = config.get('bykc_root') + "/sscv" + "/casLogin"
+                resp = await session.get(url, follow_redirects=False)
+                if resp.status_code in [301, 302]:
+                    url = resp.headers['Location']
+                url = await SsoApi(self.username, self.password).login_sso(url)
                 while True:
                     resp = await session.get(url, follow_redirects=False)  # manually redirect
                     searching_token = patterns.token.search(url)
                     if searching_token:
                         self.token = searching_token.group(1)
-                        print('login success')
                         storage.set('token', self.token)
+                        print('login success')
                         break
                     elif resp.status_code in [301, 302]:
                         url = resp.headers['Location']
@@ -73,7 +85,8 @@ class Client:
         """
         clear session and logout
         """
-        self.token = None
+        self.token = ''
+        self.zero_trust_engine = ''
 
     async def __call_api(self, api_name: str, data: dict):
         """call api and try to deal with some exceptions"""
@@ -85,7 +98,7 @@ class Client:
                 logging.info('login expired, retrying...' + repr(e))
                 last_exception = e
                 try:
-                    await self.login()
+                    await self.soft_login()
                 except LoginError as e:
                     last_exception = e
                     await asyncio.sleep(1)
@@ -101,7 +114,9 @@ class Client:
         :param data: could also be found in `app.js`
         :return: raw data returned by the api
         """
-        url = config.get('bykc_root') + '/' + api_name
+        if not self.token or not self.zero_trust_engine:
+            raise LoginExpired("login expired")
+        url = config.get('bykc_root') + '/sscv/' + api_name
         data_str = json.dumps(data).encode()
         aes_key = generate_aes_key()
         ak = rsa_encrypt(aes_key).decode()
@@ -113,6 +128,7 @@ class Client:
         headers = {
             'Content-Type': 'application/json;charset=utf-8',
             'User-Agent': config.get('user_agent'),
+            'Cookie': f'ZeroTrustEngine={self.zero_trust_engine}',
             'auth_token': self.token,
             'authtoken': self.token,
             'ak': ak,
@@ -124,6 +140,8 @@ class Client:
             async with httpx.AsyncClient() as session:
                 resp = await session.post(url, content=data_encrypted, headers=headers)
                 text = resp.content
+                if resp.status_code == 302:
+                    raise LoginExpired("login expired")
                 if resp.status_code != 200:
                     raise UnknownError(f"server panics with http status code: {resp.status_code}")
                 try:

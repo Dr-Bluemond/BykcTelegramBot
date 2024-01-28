@@ -43,7 +43,7 @@ v0.1.2
 ```json
 {
     "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.109 Safari/537.36",
-    "bykc_root": "https://bykc.buaa.edu.cn/sscv",
+    "bykc_root": "https://bykc.buaa.edu.cn",
     "sso_username": "你的统一认证学号",
     "sso_password": "你的统一认证密码",
     "telegram_token": "你在@BotFather处获取的token",
