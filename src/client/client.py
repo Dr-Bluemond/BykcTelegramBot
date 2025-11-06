@@ -32,9 +32,8 @@ class Client:
         """
         first try to login with token that is stored in config file, if failed, login with username and password
         """
-        if storage.get('token') and storage.get('zero_trust_engine'):
+        if storage.get('token'):
             self.token = storage.get('token')
-            self.zero_trust_engine = storage.get('zero_trust_engine')
             try:
                 result = await self._unsafe_get_user_profile()
                 if result['employeeId'] == config.get('sso_username'):
@@ -50,17 +49,7 @@ class Client:
         """
         try:
             async with httpx.AsyncClient() as session:
-                # 第一次调用SSO登录，获取所谓ZeroTrustEngine的Cookie
-                url = config.get('bykc_root') + "/system/home"
-                url = await SsoApi(self.username, self.password).login_sso(url)
-                await session.get(url, follow_redirects=False)  # manually redirect
-                if not session.cookies.get('ZeroTrustEngine'):
-                    raise LoginError("登录错误:未找到ZeroTrustEngine")
-                self.zero_trust_engine = session.cookies.get('ZeroTrustEngine')
-                storage.set('zero_trust_engine', self.zero_trust_engine)
-
-                # 第二次调用SSO登录，获取所谓token
-                url = config.get('bykc_root') + "/sscv" + "/casLogin"
+                url = config.get('bykc_root') + "/sscv/cas/login"
                 resp = await session.get(url, follow_redirects=False)
                 if resp.status_code in [301, 302]:
                     url = resp.headers['Location']
@@ -114,7 +103,7 @@ class Client:
         :param data: could also be found in `app.js`
         :return: raw data returned by the api
         """
-        if not self.token or not self.zero_trust_engine:
+        if not self.token:
             raise LoginExpired("login expired")
         url = config.get('bykc_root') + '/sscv/' + api_name
         data_str = json.dumps(data).encode()
@@ -128,7 +117,6 @@ class Client:
         headers = {
             'Content-Type': 'application/json;charset=utf-8',
             'User-Agent': config.get('user_agent'),
-            'Cookie': f'ZeroTrustEngine={self.zero_trust_engine}',
             'auth_token': self.token,
             'authtoken': self.token,
             'ak': ak,
